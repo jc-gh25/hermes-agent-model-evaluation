@@ -4,9 +4,9 @@
 
 ## Current status
 
-**Project state:** Experimental local evaluation harness. Stage 1A (task loader), Stage 1B (standalone grader), and Stage 2 (v2 runner/worker integration) are complete. The first real v2 inference run (Mellum, `runs/run.wj9KLui7`) passed on 2026-10-11 — one smoke-test pass, not general model reliability.
+**Project state:** Experimental local evaluation harness. Task loading (`tasklib` + `tasks/exact-file-v2.json`), tool-policy enforcement and hardened grading (`grade_v2.py`), synthetic no-model tests, v2 runner/worker integration (`run_v2.sh`/`worker_v2.sh`), and timing/reporting are complete. One real v2 Mellum smoke-test pass (`runs/run.wj9KLui7`) was recorded on 2026-10-11 — one smoke-test pass, not general model reliability. The private GitHub repository (`jc-gh25/hermes-agent-model-evaluation`, PRIVATE) setup and first upload are complete.
 
-**Primary next goal:** Prepare the project for a private GitHub repository (readiness review in progress). Further real runs across models and configurations are needed before any reliability claims.
+**Primary next goal:** A repeatability pilot of **two additional fresh `exact-file-v2` Mellum runs** — three post-cleanup runs total, including the completed `runs/run.5W8oobTG` — to check consistency. Neither additional run is authorized yet; each requires explicit approval. Further real runs across models and configurations are needed before any reliability claims.
 
 **Do not do first:** Do not rerun the canonical smoke test merely to see whether it still works. Do not overwrite any retained run directory. Do not use or disclose an API token in chat, source, shared logs, or a Git commit.
 
@@ -118,7 +118,7 @@ b"container-agent-ok\n"
 
 The host grader independently confirmed the exact final bytes and checked a completed `write_file` result followed by a completed `read_file` result for that path. The model's prose wrongly described a byte-count discrepancy, but the actual deliverable and checked tool sequence passed. Keep those facts separate.
 
-## v2 integration (Stage 2 — complete, no inference)
+## v2 integration (Stage 2 — complete)
 
 Stage 2 added a separate v2 entry point without touching the v1 runner,
 worker, grader, task fixtures, or saved results. New files: `run_v2.sh`,
@@ -154,9 +154,11 @@ grader (34), and stubbed integration (3) suites. The integration test
 replaces `podman`/`hermes` with fakes and does NOT validate real Podman or
 Hermes execution or real inference.
 
-**Known limitations:** monotonic timing, the SIGKILL-vs-timeout distinction,
-and limit validation are only as good as the stub evidence; they are
-unvalidated against a real container until the authorized real run.
+**Known limitations:** the normal path (monotonic agent-process timing
+and limit validation) is exercised against a real container by the
+retained pre-cleanup and post-cleanup passes. Timeout (exit 124) and SIGKILL (exit 137) handling
+are NOT validated by a normal pass — those paths need their own
+dedicated evidence.
 
 ## Regression evidence
 
@@ -178,15 +180,6 @@ The worker should never receive the normal desktop Hermes profile, broad home di
 
 This protects the regular Hermes installation from ordinary agent mistakes; it is **not** an absolute security boundary. Known limitations include unrestricted egress, environment-delivered token exposure, worker-visible evidence in the same mounted test home, and a separate LM Studio server outside the container's CPU/RAM limits.
 
-## Next tasks — in order
-
-1. **Make tasks authoritative.** Extend/load task JSON so task ID, prompt, target path, exact expected bytes, and allowed tools come from one versioned fixture.
-2. **Enforce tool policy.** Explicitly fail a task when the trace includes a prohibited tool or unsupported creation method.
-3. **Harden trace parsing.** Malformed JSON, absent fields, or non-object arguments must yield a structured grader result, not a grader crash.
-4. **Add no-model grader tests.** Use synthetic fixtures for: valid pass; missing LF; missing/malformed trace; prohibited tool call; agent timeout with usable evidence; export/log failure.
-5. **Update README.** Link this handoff and document the canonical passing validation.
-6. **Then expand evaluation tasks.** Compare local model configurations using retained evidence and clearly recorded settings.
-
 ## Evaluation record fields
 
 For every future run, preserve the exact model ID, quantization, backend/provider, Hermes image revision, effective context capability/configuration, sampling, MTP or thinking mode, KV-cache configuration, GPU placement/offload, elapsed time, result, and evidence directory. Record unavailable settings explicitly as `unknown`.
@@ -206,6 +199,7 @@ Planned comparison buckets:
 5. Announce slow, state-changing, or paid-inference actions before requesting that they be run.
 6. Every terminal script for the user must show conspicuous `BEGIN OUTPUT TO COPY` and `END OUTPUT TO COPY` markers.
 7. Do not claim model success from its prose; use host-side artifacts and structured grading.
+8. **Absent inputs:** when required credentials or endpoint inputs (for example `LM_API_KEY` or `LM_BASE_URL`) are absent, stop and ask the operator how to supply them. Do not search config files, credential stores, or session history to recover them without explicit approval of the source. Masking values in output does not replace authorization to access them.
 
 ---
 
@@ -287,14 +281,48 @@ The first real run of the v2 path (`run_v2.sh` → `worker_v2.sh` →
 - Overall outcome: pass
 - Evidence: runs/run.wj9KLui7
 
-This is one real smoke-test pass on one narrow tool-use task. It is NOT
-general model reliability. The monotonic timing, SIGKILL-vs-timeout
-distinction, and limit validation are now exercised against a real container
-for this one pass; broader validation across models and configurations is
-still needed.
+This pass was recorded on the **pre-cleanup** runner (before the
+endpoint/model-input cleanup). It is one real smoke-test pass on one
+narrow tool-use task — NOT general model reliability. It exercised the
+normal path (monotonic agent-process timing and limit validation) against
+a real container; it did NOT exercise timeout (exit 124) or SIGKILL
+(exit 137) handling, which need their own dedicated evidence. The
+cleaned-up runner was subsequently validated against the real endpoint
+(see "Post-cleanup validation" below).
+
+## Post-cleanup validation — 2026-10-11
+
+The first run of the **cleaned-up** runner (required `LM_BASE_URL`,
+explicit model argument, pre-flight validation) completed:
+
+- Evidence: runs/run.5W8oobTG
+- Code HEAD at execution: f0394baea85b4993beaa792c48fba5c6e21582f2
+- Working tree at execution: only HANDOFF-v2.md modified (uncommitted documentation edit)
+- Task: exact-file-v2, task version 1
+- Grader: grade_v2 2.0.0
+- Model: mellum2.1-12b-a2.5b-thinking
+- Agent-process duration: 22.462 s (monotonic clock); total workflow 26.614 s;
+  session-reported 7.718 s (three separate measures)
+- Agent exit: 0; trace export exit: 0
+- Termination: normal; no infrastructure errors; container removed
+- All seven grading checks passed (agent_exit_zero, exact_bytes,
+  write_tool_completed, read_after_write_completed, requested_model,
+  expected_endpoint, allowed_tools_respected); expected and actual bytes matched
+- Configuration settings recorded as unknown (model loading, context,
+  sampling, GPU placement, and KV-cache settings were not changed)
+- Overall outcome: pass
+
+This validates **end-to-end operation with valid inputs** against real
+Podman, LM Studio, export, grading, and container cleanup. It does NOT
+validate rejection of missing/invalid inputs — that path was checked
+separately by the earlier no-model tests (the runner exits before any
+run directory or container is created). Timeout (exit 124) and SIGKILL
+(exit 137) paths also remain unvalidated by this normal run; they need
+their own dedicated evidence. This is one pass on one narrow tool-use
+task, not general model reliability.
 
 ---
-Results reporting and the webpage dashboard are implemented as separate utilities; timing, configuration capture, and automatic report generation are integrated. Here is the current roadmap.
+Results reporting and the webpage dashboard are implemented as separate, manually invoked utilities. Timing is integrated into the v2 run path; configuration metadata fields exist, but settings unavailable to the runner remain unknown. Automatic report generation is not integrated. Here is the current roadmap.
 
 ## Already completed
 
@@ -312,6 +340,7 @@ Results reporting and the webpage dashboard are implemented as separate utilitie
 - [x] Add v2 runner/worker with monotonic agent timing and limit validation (run_v2.sh, worker_v2.sh).
 - [x] Add a stubbed no-inference integration test (tests/test_integration_v2.py; pipeline wiring only).
 - [x] Update reporting/dashboard for task/grader versions and the three-way timing split.
+- [x] Set up the private GitHub repository (`jc-gh25/hermes-agent-model-evaluation`, PRIVATE) and complete the first upload.
 
 ## Remaining work
 
@@ -342,7 +371,7 @@ Only after this phase should we treat the dashboard as a meaningful comparison o
 
 ## Current status and next step
 
-The task JSON is authoritative (tasklib + exact-file-v2), the grader is hardened (grade_v2), synthetic tests are in place, timing/reporting are integrated, and the first real v2 Mellum run passed (`runs/run.wj9KLui7`). The next step is broader real validation across models and configurations; each run requires explicit authorization.
+The task JSON is authoritative (tasklib + exact-file-v2), the grader is hardened (grade_v2), synthetic tests are in place, timing/reporting are integrated, the first real v2 Mellum run passed (`runs/run.wj9KLui7`, pre-cleanup runner), the private GitHub repository setup and first upload are complete, and the cleaned-up runner passed post-cleanup validation against the real endpoint (`runs/run.5W8oobTG`, end-to-end with valid inputs). The next step is a repeatability pilot of two additional fresh `exact-file-v2` Mellum runs (three post-cleanup runs total, including `runs/run.5W8oobTG`) to check consistency; neither additional run is authorized yet, and each requires explicit approval, as does every run.
 
 ---
 
