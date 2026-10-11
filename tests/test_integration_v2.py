@@ -168,6 +168,9 @@ class IntegrationV2Tests(unittest.TestCase):
         env["STUB_AGENT_MODE"] = agent_mode
         env["STUB_IMAGE_MODE"] = image_mode
         env["STUB_CLEANUP_MARKER"] = str(self.cleanup_marker)
+        # Keep git from walking up out of the isolated project when
+        # the runner records code provenance.
+        env["GIT_CEILING_DIRECTORIES"] = str(self.project)
         return subprocess.run(
             ["bash", str(self.project / "run_v2.sh"), model],
             env=env, capture_output=True, text=True, timeout=120,
@@ -177,6 +180,56 @@ class IntegrationV2Tests(unittest.TestCase):
         runs = sorted((self.project / "runs").glob("run.*"))
         self.assertEqual(len(runs), 1, f"expected one run dir, found {len(runs)}")
         return runs[0]
+
+    def _run_dirs(self):
+        return sorted((self.project / "runs").glob("run.*"),
+                      key=lambda p: p.stat().st_mtime)
+
+    def _metadata(self, run_dir):
+        return json.loads((run_dir / "metadata.json").read_text(encoding="utf-8"))
+
+    def _git(self, *args):
+        return subprocess.run(
+            ["git", "-C", str(self.project), *args],
+            capture_output=True, text=True, check=True,
+        )
+
+    def _init_clean_repo(self):
+        """Turn the isolated project copy into a clean git repo.
+
+        A .gitignore keeps the synthetic run/report evidence from
+        making the tree dirty once a run directory is created.
+        """
+        (self.project / ".gitignore").write_text(
+            "runs/\nreports/\n__pycache__/\n*.pyc\n",
+            encoding="utf-8",
+        )
+        self._git("init")
+        self._git("config", "user.email", "test@example.invalid")
+        self._git("config", "user.name", "test")
+        self._git("add", ".gitignore", "run_v2.sh", "worker_v2.sh",
+                  "grade_v2.py", "tasklib.py", "tasks/exact-file-v2.json")
+        self._git("commit", "-m", "test baseline")
+
+    def _expected_fingerprint(self, snapshot_bytes):
+        """Recompute the scheme-v1 fingerprint exactly as the
+        runner does: over the four evaluation scripts plus the
+        given snapshot bytes under the stable name
+        task_snapshot.json."""
+        import hashlib
+        inputs = sorted(
+            [(name, (self.project / name).read_bytes())
+             for name in ("run_v2.sh", "worker_v2.sh",
+                          "grade_v2.py", "tasklib.py")]
+            + [("task_snapshot.json", snapshot_bytes)]
+        )
+        h = hashlib.sha256()
+        for name, content in inputs:
+            h.update(name.encode("utf-8"))
+            h.update(b"\x00")
+            h.update(hashlib.sha256(content).hexdigest().encode("ascii"))
+            h.update(b"\n")
+        return h.hexdigest()
 
     def test_pass_pipeline(self):
         """STUBBED: full pass path through run_v2 -> worker_v2 -> grade_v2."""
@@ -254,6 +307,131 @@ class IntegrationV2Tests(unittest.TestCase):
         runs_dir = self.project / "runs"
         run_dirs = list(runs_dir.glob("run.*")) if runs_dir.exists() else []
         self.assertEqual(run_dirs, [])
+
+    # --- runner code-provenance capture (stubbed, no inference) ---
+    def test_provenance_unavailable_git_unknown(self):
+        """STUBBED: when Git information is unavailable (the isolated
+        project is not a git repo), commit and dirty state are
+        'unknown' -- never a false 'clean' -- while the content
+        fingerprint is still computed."""
+        proc = self.run_v2(model="stub-model")
+        self.assertEqual(proc.returncode, 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+        meta = self._metadata(self.run_dir())
+        self.assertEqual(meta["code_commit"], "unknown")
+        self.assertEqual(meta["code_tree_dirty"], "unknown")
+        self.assertEqual(meta["code_fingerprint_scheme"], "v1")
+        self.assertRegex(meta["code_fingerprint"], r"^[0-9a-f]{64}$")
+
+    @unittest.skipUnless(shutil.which("git"), "git not available")
+    def test_provenance_clean_repo_recorded(self):
+        """STUBBED: a clean git repo records the commit hash, a clean
+        tree, and a valid scheme-v1 fingerprint."""
+        self._init_clean_repo()
+        proc = self.run_v2(model="stub-model")
+        self.assertEqual(proc.returncode, 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+        meta = self._metadata(self.run_dir())
+        self.assertRegex(meta["code_commit"], r"^[0-9a-f]{40}$")
+        self.assertEqual(meta["code_tree_dirty"], "false")
+        self.assertEqual(meta["code_fingerprint_scheme"], "v1")
+        self.assertRegex(meta["code_fingerprint"], r"^[0-9a-f]{64}$")
+
+    @unittest.skipUnless(shutil.which("git"), "git not available")
+    def test_provenance_dirty_tree_recorded_and_fingerprint_changes(self):
+        """STUBBED: a dirty tree is recorded as dirty (not falsely
+        clean), the commit is unchanged, and the content fingerprint
+        changes because it is computed from actual file bytes."""
+        self._init_clean_repo()
+        proc = self.run_v2(model="stub-model")
+        self.assertEqual(proc.returncode, 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+        first = set(self._run_dirs())
+        self.assertEqual(len(first), 1)
+        clean_meta = self._metadata(next(iter(first)))
+        self.assertEqual(clean_meta["code_tree_dirty"], "false")
+        clean_fp = clean_meta["code_fingerprint"]
+        # Dirty the worker script (a trailing comment is valid bash).
+        worker = self.project / "worker_v2.sh"
+        worker.write_text(
+            worker.read_text(encoding="utf-8") + "\n# dirty marker\n",
+            encoding="utf-8",
+        )
+        proc = self.run_v2(model="stub-model")
+        self.assertEqual(proc.returncode, 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+        new_runs = set(self._run_dirs()) - first
+        self.assertEqual(len(new_runs), 1)
+        dirty_meta = self._metadata(next(iter(new_runs)))
+        self.assertEqual(dirty_meta["code_tree_dirty"], "true")
+        self.assertEqual(dirty_meta["code_commit"], clean_meta["code_commit"])
+        self.assertNotEqual(dirty_meta["code_fingerprint"], clean_fp)
+        self.assertRegex(dirty_meta["code_fingerprint"], r"^[0-9a-f]{64}$")
+
+    @unittest.skipUnless(shutil.which("git"), "git not available")
+    def test_provenance_fingerprint_uses_snapshot_artifact(self):
+        """STUBBED: the recorded fingerprint is computed from the
+        exact per-run task snapshot artifact (the run dir's
+        task.json bytes) under the stable name task_snapshot.json,
+        not a re-read of the source fixture path."""
+        self._init_clean_repo()
+        proc = self.run_v2(model="stub-model")
+        self.assertEqual(proc.returncode, 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+        run_dir = self.run_dir()
+        snapshot_bytes = (run_dir / "task.json").read_bytes()
+        meta = self._metadata(run_dir)
+        self.assertEqual(meta["code_fingerprint_scheme"], "v1")
+        self.assertEqual(meta["code_fingerprint"],
+                         self._expected_fingerprint(snapshot_bytes))
+
+    @unittest.skipUnless(shutil.which("git"), "git not available")
+    def test_provenance_fingerprint_tracks_snapshot_mutation(self):
+        """STUBBED: after the source fixture is mutated (post
+        snapshot creation), a new run's fingerprint reflects the
+        mutated snapshot bytes actually copied for that run, and
+        differs from the earlier run's fingerprint."""
+        self._init_clean_repo()
+        proc = self.run_v2(model="stub-model")
+        self.assertEqual(proc.returncode, 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+        first = set(self._run_dirs())
+        self.assertEqual(len(first), 1)
+        first_dir = next(iter(first))
+        first_fp = self._metadata(first_dir)["code_fingerprint"]
+        first_snapshot = (first_dir / "task.json").read_bytes()
+        # Mutate the source fixture (a valid task, different prompt).
+        snapshot_path = self.project / "tasks" / "exact-file-v2.json"
+        task = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        task["prompt"] = task["prompt"] + "\n# mutated for test\n"
+        snapshot_path.write_text(json.dumps(task, indent=2), encoding="utf-8")
+        proc = self.run_v2(model="stub-model")
+        self.assertEqual(proc.returncode, 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+        new_runs = set(self._run_dirs()) - first
+        self.assertEqual(len(new_runs), 1)
+        second_dir = next(iter(new_runs))
+        second_snapshot = (second_dir / "task.json").read_bytes()
+        # The second run used the mutated snapshot bytes.
+        self.assertNotEqual(second_snapshot, first_snapshot)
+        second_meta = self._metadata(second_dir)
+        self.assertEqual(second_meta["code_fingerprint"],
+                         self._expected_fingerprint(second_snapshot))
+        self.assertNotEqual(second_meta["code_fingerprint"], first_fp)
+
+    @unittest.skipUnless(shutil.which("git"), "git not available")
+    def test_provenance_fingerprint_failure_is_unknown(self):
+        """STUBBED: when a hashed script is unreadable, the
+        fingerprint computation fails safely as 'unknown' -- the
+        setup heredoc writes metadata.json instead of crashing,
+        and no false fingerprint is recorded."""
+        self._init_clean_repo()
+        # Remove a hashed script that the setup heredoc does not
+        # import, so only the fingerprint read fails.
+        (self.project / "worker_v2.sh").unlink()
+        proc = self.run_v2(model="stub-model")
+        # The run may fail later (the container step needs the
+        # worker script), but the setup phase must have survived.
+        run_dirs = self._run_dirs()
+        self.assertEqual(len(run_dirs), 1)
+        meta = self._metadata(run_dirs[0])
+        self.assertEqual(meta["code_fingerprint"], "unknown")
+        self.assertEqual(meta["code_fingerprint_scheme"], "v1")
+        # No Python traceback from the setup phase.
+        self.assertNotIn("Traceback", proc.stderr)
 
 
 if __name__ == "__main__":

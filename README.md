@@ -60,6 +60,66 @@ grading is host-only.
   (monotonic clock), and session-reported (inside the trace). They are not
   interchangeable.
 
+## Run provenance and reporting privacy
+
+Each run records code provenance in `metadata.json` (which
+`grade_v2.py` copies through to `result.json`):
+
+- `code_fingerprint_scheme`: the fingerprint scheme version
+  (`v1`).
+- `code_fingerprint`: scheme `v1` is `sha256` over the sorted
+  `(filename, sha256(content))` of `run_v2.sh`, `worker_v2.sh`,
+  `grade_v2.py`, `tasklib.py`, and the exact per-run task
+  snapshot bytes (the snapshot copied into the run directory
+  and used for the run), under the stable input name
+  `task_snapshot.json`. It is computed from actual file bytes,
+  so uncommitted edits are captured. Report and dashboard code,
+  credentials, endpoints, environment dumps, and unrelated
+  files are excluded. A fingerprint computation failure is
+  recorded as `unknown` -- never a crash and never a false
+  fingerprint.
+- `code_commit`: the Git commit at run time, or `unknown` when
+  Git information is unavailable (never a false `clean`).
+- `code_tree_dirty`: `true` / `false` / `unknown` (unknown when
+  Git information is unavailable).
+- Scheme versioning: `code_fingerprint_scheme` is `v1`. The v1
+  definition was refined (to hash the exact per-run snapshot
+  bytes under the stable name `task_snapshot.json`, rather than
+  re-reading the source fixture path) before any commit or saved
+  run used it, so no previously committed or saved `v1`
+  fingerprint exists to be invalidated.
+- `infrastructure_errors` is exported as a safe count only (in
+  both `runs.csv` and `summary.csv`). A legacy result with no
+  `infrastructure_errors` field counts as zero. A present
+  non-list value (including null) is invalid report input: the
+  attempt is exported with outcome `invalid_data` and counted in
+  `summary.csv`'s `invalid_data` column — unscored (not a pass,
+  valid attempt, successful timed run, or in any success
+  percentage or timing median), but visible in total attempts and
+  the invalid-data count. It is not a model failure and not an
+  infrastructure error. The raw malformed value is never exported
+  (the per-run count shows `unknown`). Raw infrastructure-error
+  messages are never exported to any report, CSV, notes, or
+  dashboard HTML; they remain only in the local `result.json`.
+
+The reporter (`model_eval_report.py`) derives each evidence
+identifier from where the result actually lives
+(`runs/<run-id>`), never from a metadata string, so it stays
+valid when the project is moved. Generated reports contain no
+absolute home paths.
+
+Runs group by fingerprint scheme + fingerprint alongside the
+task/grader/model/configuration keys, so a documentation-only
+commit (same fingerprint) does not split an equivalent
+implementation, while a real code change (different fingerprint)
+does. Runs without a recorded fingerprint show `unknown
+provenance` and stay distinct from runs with a recorded
+fingerprint. Provenance is never invented or inferred from
+timestamps; legacy runs keep unknown provenance. In the summary
+table, all distinct recorded commits and dirty states are
+listed (not one attempt's values); individual evidence
+identifiers live in the per-run table.
+
 ## Testing (no model)
 
 ```bash

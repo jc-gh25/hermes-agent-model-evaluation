@@ -52,6 +52,7 @@ export TEST_MODEL="$MODEL"
 python3 - "$BASE" "$RUN" "$TASK_SNAPSHOT" "$MODEL" "$IMAGE" "$OVERHEAD_SECONDS" "$LM_BASE_URL" <<'PY'
 import hashlib
 import json
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -93,6 +94,56 @@ if required > container_seconds:
     )
     sys.exit(3)
 
+# --- code provenance, captured at run time (host-side) ---
+# Git commit and dirty state are recorded separately from the
+# content fingerprint. Unavailable Git information is recorded
+# as "unknown", never a false "clean".
+def _git(*args):
+    try:
+        proc = subprocess.run(
+            ["git", "-C", base, *args],
+            capture_output=True, text=True, timeout=10,
+        )
+        return proc.stdout.strip() if proc.returncode == 0 else None
+    except Exception:
+        return None
+
+_commit = _git("rev-parse", "HEAD")
+_porcelain = _git("status", "--porcelain")
+code_commit = _commit if _commit else "unknown"
+code_tree_dirty = (
+    "unknown" if _porcelain is None
+    else ("true" if _porcelain.strip() else "false")
+)
+
+# --- code fingerprint (scheme v1) ---
+# sha256 over the sorted (filename, sha256(content)) of the
+# evaluation scripts and the EXACT per-run task snapshot bytes
+# -- the snapshot already copied into the run directory (task.json)
+# and used for this run, NOT a later re-read of the source
+# fixture. The snapshot input carries the stable, descriptive
+# name "task_snapshot.json". Report/dashboard code, credentials,
+# endpoints, environment dumps, and unrelated files are excluded.
+# Computed from actual file bytes, so uncommitted edits are
+# captured too. Any computation failure is recorded as "unknown"
+# -- never a crash and never a false fingerprint.
+code_fingerprint_scheme = "v1"
+try:
+    _fingerprint_inputs = sorted(
+        [(name, (Path(base) / name).read_bytes())
+         for name in ("run_v2.sh", "worker_v2.sh", "grade_v2.py", "tasklib.py")]
+        + [("task_snapshot.json", snapshot_bytes)]
+    )
+    _fingerprint = hashlib.sha256()
+    for _name, _content in _fingerprint_inputs:
+        _fingerprint.update(_name.encode("utf-8"))
+        _fingerprint.update(b"\x00")
+        _fingerprint.update(hashlib.sha256(_content).hexdigest().encode("ascii"))
+        _fingerprint.update(b"\n")
+    code_fingerprint = _fingerprint.hexdigest()
+except Exception:
+    code_fingerprint = "unknown"
+
 # Host-only run metadata, derived from the snapshot.
 metadata = {
     "task": task["id"],
@@ -104,6 +155,10 @@ metadata = {
     "provider": "lmstudio",
     "base_url": base_url,
     "started_at": time.time(),
+    "code_fingerprint_scheme": code_fingerprint_scheme,
+    "code_fingerprint": code_fingerprint,
+    "code_commit": code_commit,
+    "code_tree_dirty": code_tree_dirty,
     "settings": {k: "unknown" for k in [
         "quantization", "sampling", "mtp", "gpu_placement", "context_size", "kv_precision"
     ]},
