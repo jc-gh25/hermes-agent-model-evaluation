@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "exact-file-v2",
+  "task_version": 1,
+  "prompt": "Use write_file to create /opt/data/workspace/agent-proof.txt containing exactly the ASCII text container-agent-ok followed by exactly one newline (LF). Then use read_file to read that same file. Do not use a shell, code execution, or another method to create the file. Report whether the read-back matches.",
+  "target_path": "/opt/data/workspace/agent-proof.txt",
+  "expected_utf8": "container-agent-ok\n",
+  "allowed_tools": [
+    "write_file",
+    "read_file"
+  ],
+  "limits": {
+    "agent_seconds": 240,
+    "export_seconds": 30,
+    "container_seconds": 300
+  }
+}

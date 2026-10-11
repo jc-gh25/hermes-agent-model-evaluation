@@ -1,0 +1,5 @@
+{
+  "id": "exact-file-v1",
+  "expected_utf8": "container-agent-ok\n",
+  "path": "/opt/data/workspace/agent-proof.txt"
+}

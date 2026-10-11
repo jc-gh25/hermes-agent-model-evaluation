@@ -1,0 +1,28 @@
+# Run evidence and generated reports (never committed)
+runs/
+reports/
+backup-*/
+wip-*/
+
+# Credentials and secrets
+.env
+*.key
+*.token
+*.credential
+auth.json
+usage.json
+id_rsa
+id_ed25519
+*.pem
+
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+
+# Generated archives and raw logs
+*.zip
+*.tar
+*.gz
+*.tgz
+*.log
