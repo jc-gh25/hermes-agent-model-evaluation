@@ -4,9 +4,9 @@
 
 ## Current status
 
-**Project state:** Experimental local evaluation harness. Task loading (`tasklib` + `tasks/exact-file-v2.json`), tool-policy enforcement and hardened grading (`grade_v2.py`), synthetic no-model tests, v2 runner/worker integration (`run_v2.sh`/`worker_v2.sh`), and timing/reporting are complete. One real v2 Mellum smoke-test pass (`runs/run.wj9KLui7`) was recorded on 2026-10-11 — one smoke-test pass, not general model reliability. The private GitHub repository (`jc-gh25/hermes-agent-model-evaluation`, PRIVATE) setup and first upload are complete.
+**Project state:** Experimental local evaluation harness. Task loading (`tasklib` + `tasks/exact-file-v2.json`), tool-policy enforcement and hardened grading (`grade_v2.py`), synthetic no-model tests, v2 runner/worker integration (`run_v2.sh`/`worker_v2.sh`), timing/reporting, privacy-safe reporting, and evaluator provenance are complete. Real v2 Mellum validation on 2026-10-11: one pre-cleanup pass (`runs/run.wj9KLui7`) and a completed three-run post-cleanup pilot (`runs/run.5W8oobTG`, `runs/run.TQQj4VI3`, `runs/run.JHZ5yJ2U`) — narrow-task passes, not general model reliability. The private GitHub repository (`jc-gh25/hermes-agent-model-evaluation`, PRIVATE) holds the full history; the privacy-safe reporting and evaluator-provenance implementation is committed and pushed at `f90a9ac` ("Add privacy-safe reporting and evaluator provenance").
 
-**Primary next goal:** A repeatability pilot of **two additional fresh `exact-file-v2` Mellum runs** — three post-cleanup runs total, including the completed `runs/run.5W8oobTG` — to check consistency. Neither additional run is authorized yet; each requires explicit approval. Further real runs across models and configurations are needed before any reliability claims.
+**Current goal:** The three-run post-cleanup `exact-file-v2` Mellum repeatability pilot is COMPLETE — all three runs passed the narrow task (structured details below). The next planned work is a reader-facing `README.md` rewrite. This document authorizes no new inference or implementation work; every real run still requires explicit approval.
 
 **Do not do first:** Do not rerun the canonical smoke test merely to see whether it still works. Do not overwrite any retained run directory. Do not use or disclose an API token in chat, source, shared logs, or a Git commit.
 
@@ -64,15 +64,19 @@ The display was moved to the separate 16 GB GPU; the RTX 3070, but still, a long
 ├── worker_v2.sh               # v2 container worker: snapshot-derived prompt/limits, monotonic agent timing
 ├── grade_v2.py                # v2 host grader: byte + trace + tool-policy + termination classification
 ├── tasklib.py                 # Authoritative task-definition loader (stdlib-only, safe to import)
-├── model_eval_report.py       # CSV summary reporter (groups by task/version/grader/configuration)
-├── model_eval_dashboard.py    # Offline HTML dashboard generator
+├── model_eval_report.py       # Privacy-safe CSV reporter: count-only infrastructure errors, invalid_data handling, location-derived evidence IDs, provenance grouping
+├── model_eval_dashboard.py    # Offline HTML dashboard generator (provenance-aware)
 ├── tasks/
 │   ├── exact-file-v1.json     # v1 task fixture (legacy)
 │   └── exact-file-v2.json     # v2 authoritative task fixture
-├── tests/                     # No-model suites: loader, grader, stubbed integration
+├── tests/                     # No-model suites: loader, grader, integration (stubbed), report-privacy
 └── runs/
     ├── run.YFQhuYf4/          # v1 canonical successful validation
-    └── run.xGecy3nC/          # v1 Mellum successful validation
+    ├── run.xGecy3nC/          # v1 Mellum successful validation
+    ├── run.wj9KLui7/          # v2 pre-cleanup Mellum pass
+    ├── run.5W8oobTG/          # v2 post-cleanup pilot pass 1/3
+    ├── run.TQQj4VI3/          # v2 post-cleanup pilot pass 2/3
+    └── run.JHZ5yJ2U/          # v2 post-cleanup pilot pass 3/3
 ```
 
 The v1 fixture is still described by `tasks/exact-file-v1.json`, but the v1 worker and grader hardcode important task values. The v2 path (`run_v2.sh`/`worker_v2.sh`/`grade_v2.py`) uses the authoritative `tasks/exact-file-v2.json` instead.
@@ -149,10 +153,16 @@ NOT a confirmed timeout. A later successful write to the target invalidates
 an earlier read even if that later write is not verified; the verified-write
 requirement is independent.
 
-**Testing:** `python3 -m unittest discover -s tests -v` runs the loader (8),
-grader (34), and stubbed integration (3) suites. The integration test
-replaces `podman`/`hermes` with fakes and does NOT validate real Podman or
-Hermes execution or real inference.
+**Testing (recorded validation — not rerun this turn):** the last
+reported no-model suite had **68 passing tests**: loader (8), grader
+(34), integration (9), and report-privacy (17), run with
+`python3 -m unittest discover -s tests -v`. The integration suite is
+STUBBED — it replaces `podman`/`hermes` with fakes and does NOT
+validate real Podman or Hermes execution or real inference. The
+report-privacy suite covers count-only infrastructure-error exports,
+`invalid_data` handling of malformed error fields, location-derived
+evidence identifiers, and provenance grouping, all against synthetic
+fixtures.
 
 **Known limitations:** the normal path (monotonic agent-process timing
 and limit validation) is exercised against a real container by the
@@ -321,6 +331,98 @@ run directory or container is created). Timeout (exit 124) and SIGKILL
 their own dedicated evidence. This is one pass on one narrow tool-use
 task, not general model reliability.
 
+### Post-cleanup repeatability pilot — COMPLETE (2026-10-11)
+
+The three-run post-cleanup `exact-file-v2` Mellum pilot is complete:
+`runs/run.5W8oobTG`, `runs/run.TQQj4VI3`, and `runs/run.JHZ5yJ2U`.
+All three passed the narrow task. Each is one pass on one narrow
+tool-use task — not general model reliability. The values below are
+read from each run's structured `result.json`; the three timing
+measures are separate and not interchangeable.
+
+| Run | Agent-process (monotonic) | Total workflow (host) | Session-reported | Agent exit | Grading checks | Outcome |
+| --- | --- | --- | --- | --- | --- | --- |
+| `runs/run.5W8oobTG` | 22.462 s | 26.614 s | 7.718 s | 0 | 7/7 passed | pass |
+| `runs/run.TQQj4VI3` | 14.08 s | 18.318 s | 7.209 s | 0 | 7/7 passed | pass |
+| `runs/run.JHZ5yJ2U` | 36.204 s | 40.451 s | 29.213 s | 0 | 7/7 passed | pass |
+
+Common to all three: task `exact-file-v2` version 1, grader `grade_v2`
+2.0.0, model `mellum2.1-12b-a2.5b-thinking`, provider `lmstudio`
+(endpoint as recorded in each run's metadata), termination `normal`,
+`infrastructure_errors: []`, expected and actual bytes matched, and all
+seven grading checks true (`agent_exit_zero`, `exact_bytes`,
+`write_tool_completed`, `read_after_write_completed`, `requested_model`,
+`expected_endpoint`, `allowed_tools_respected`). Configuration settings
+(quantization, sampling, MTP, GPU placement, context size, KV precision)
+are recorded as `unknown`. Agent-process durations span 14.08–36.204 s:
+outcomes were consistent while timings varied. Code revisions were
+reported separately in the operator run reports:
+`f0394baea85b4993beaa792c48fba5c6e21582f2` for `run.5W8oobTG`, and
+`0dbfdb073bcb2c5001b2ab9c1ab61a7b3f0254bb` for `run.TQQj4VI3` and
+`run.JHZ5yJ2U`. These revisions were not captured automatically in the
+retained metadata/result provenance fields. The reporter therefore
+continues to label these runs' code provenance unknown; do not retrofit
+their evidence.
+
+The normal path (monotonic agent-process timing and limit validation)
+is exercised against a real container by these passes. Timeout (exit
+124) and SIGKILL (exit 137) handling remain UNVALIDATED by any real
+run — those paths still need their own dedicated evidence.
+
+## Evaluator provenance and reporting privacy (committed and pushed at f90a9ac)
+
+The implementation commit `f90a9ac` ("Add privacy-safe reporting and
+evaluator provenance") changed exactly six files: `README.md`,
+`model_eval_dashboard.py`, `model_eval_report.py`, `run_v2.sh`,
+`tests/test_integration_v2.py`, and `tests/test_report_privacy_v2.py`
+(new). Behavior:
+
+- `run_v2.sh` records in `metadata.json` (which `grade_v2.py` copies
+  through to `result.json`): `code_fingerprint_scheme` (`v1`);
+  `code_fingerprint` — scheme `v1` is `sha256` over the sorted
+  `(filename, sha256(content))` pairs of `run_v2.sh`, `worker_v2.sh`,
+  `grade_v2.py`, `tasklib.py`, and the exact per-run task-snapshot
+  bytes under the stable name `task_snapshot.json`, computed from
+  actual file bytes so uncommitted edits are captured; `code_commit`
+  (or `unknown` when Git information is unavailable); and
+  `code_tree_dirty` (`true` / `false` / `unknown`). A fingerprint
+  computation failure is recorded as `unknown` — never a crash and
+  never a false fingerprint. Report/dashboard code, credentials,
+  endpoints, environment dumps, and unrelated files are excluded.
+- `model_eval_report.py` exports `infrastructure_errors` as a safe
+  count only (in `runs.csv` and `summary.csv`); a legacy result with
+  no `infrastructure_errors` field counts as zero. A present non-list
+  value (including null) is invalid report input: the attempt is
+  exported with outcome `invalid_data` and counted in `summary.csv`'s
+  `invalid_data` column — unscored (not a pass, valid attempt,
+  successful timed run, or in any success percentage or timing median),
+  but visible in total attempts and the invalid-data count; it is not a
+  model failure and not an infrastructure error. The raw malformed value
+  is never exported (the per-run count shows `unknown`). Evidence
+  identifiers derive from where each result actually lives
+  (`runs/<run-id>`), never from metadata strings, so they stay valid when
+  the project is moved. Raw infrastructure-error messages are never
+  exported to any report, CSV, notes, or dashboard HTML; they remain
+  only in the local `result.json`.
+- Runs group by fingerprint scheme + fingerprint alongside the
+  task/grader/model/configuration keys, so a documentation-only commit
+  (same fingerprint) does not split an equivalent implementation, while a
+  real code change (different fingerprint) does. Runs without a recorded
+  fingerprint show `unknown provenance` and stay distinct from runs with a
+  recorded fingerprint; provenance is never invented or inferred from
+  timestamps.
+
+**All six retained real runs predate provenance capture**
+(`run.YFQhuYf4`, `run.xGecy3nC`, `run.wj9KLui7`, `run.5W8oobTG`,
+`run.TQQj4VI3`, `run.JHZ5yJ2U`): `code_fingerprint`, `code_commit`,
+and `code_tree_dirty` are absent from their `metadata.json` and
+`result.json`, so their recorded code provenance is `unknown`. Do not
+retrofit their metadata — legacy runs keep unknown provenance by design.
+Runner provenance capture is covered by stubbed integration tests;
+export validation and provenance grouping are covered by the 17-test
+report-privacy suite using synthetic fixtures. No retained real run
+exercises the provenance capture added in `f90a9ac`.
+
 ---
 Results reporting and the webpage dashboard are implemented as separate, manually invoked utilities. Timing is integrated into the v2 run path; configuration metadata fields exist, but settings unavailable to the runner remain unknown. Automatic report generation is not integrated. Here is the current roadmap.
 
@@ -341,9 +443,12 @@ Results reporting and the webpage dashboard are implemented as separate, manuall
 - [x] Add a stubbed no-inference integration test (tests/test_integration_v2.py; pipeline wiring only).
 - [x] Update reporting/dashboard for task/grader versions and the three-way timing split.
 - [x] Set up the private GitHub repository (`jc-gh25/hermes-agent-model-evaluation`, PRIVATE) and complete the first upload.
+- [x] Complete the three-run post-cleanup `exact-file-v2` Mellum repeatability pilot (`runs/run.5W8oobTG`, `runs/run.TQQj4VI3`, `runs/run.JHZ5yJ2U` — all passed the narrow task).
+- [x] Commit and push privacy-safe reporting and evaluator provenance at `f90a9ac` (exactly six files; no run evidence, reports, or patch files uploaded).
 
 ## Remaining work
 
+- Rewrite `README.md` as the reader-facing entry point (next planned work; documentation only — no new inference or implementation).
 - Distinguish automatically observed settings from manually supplied ones; leave unavailable values as `unknown`.
 - Optionally refresh reports automatically after a completed evaluation, and provide an easy-to-find dashboard entry point rather than requiring timestamped directories to be located manually.
 - Keep configurations separate in comparisons — for example, Mellum with GPU-resident Q4 cache versus Mellum with cache in system RAM.
@@ -371,7 +476,7 @@ Only after this phase should we treat the dashboard as a meaningful comparison o
 
 ## Current status and next step
 
-The task JSON is authoritative (tasklib + exact-file-v2), the grader is hardened (grade_v2), synthetic tests are in place, timing/reporting are integrated, the first real v2 Mellum run passed (`runs/run.wj9KLui7`, pre-cleanup runner), the private GitHub repository setup and first upload are complete, and the cleaned-up runner passed post-cleanup validation against the real endpoint (`runs/run.5W8oobTG`, end-to-end with valid inputs). The next step is a repeatability pilot of two additional fresh `exact-file-v2` Mellum runs (three post-cleanup runs total, including `runs/run.5W8oobTG`) to check consistency; neither additional run is authorized yet, and each requires explicit approval, as does every run.
+The task JSON is authoritative (tasklib + exact-file-v2), the grader is hardened (grade_v2), synthetic tests are in place, timing/reporting are integrated, privacy-safe reporting and evaluator provenance are committed and pushed at `f90a9ac`, the first real v2 Mellum run passed (`runs/run.wj9KLui7`, pre-cleanup runner), and the three-run post-cleanup pilot passed against the real endpoint (`runs/run.5W8oobTG`, `runs/run.TQQj4VI3`, `runs/run.JHZ5yJ2U`). The next planned work is a reader-facing `README.md` rewrite. No new inference or implementation work is authorized by this document; every real run still requires explicit approval.
 
 ---
 
